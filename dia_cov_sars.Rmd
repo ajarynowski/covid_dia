@@ -1,0 +1,246 @@
+---
+title: "SIR Model with Non-Pharmaceutical Interventions"
+author:
+- Andrzej Jarynowski (ajarynowski@gmail.com)
+- Vitaly Belik (vitaly.belik@fu-berlin.de)
+date: "2025"
+output:
+  html_document:
+    toc: yes
+    toc_float: true
+    depth: 3
+    fig_caption: yes
+    highlight: tango
+    number_sections: yes
+    theme: paper
+  pdf_document:
+    toc: yes
+---
+Reduced Transmission Rate (beta_reduced): 
+
+
+#"SIR Model with Non-Pharmaceutical Interventions"
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(deSolve)
+library(ggplot2)
+library(tidyverse)
+```
+
+Modified SIR Model with Interventions
+```{r}
+## SIR z interwencją, która ma początek i koniec
+sir_intervention_model <- function(time, state, parameters) {
+  with(as.list(c(state, parameters)), {
+
+    # bazowa transmisja
+    current_beta <- beta
+
+    # 1. interwencja: np. 18–37 dzień (tak jak wcześniej)
+    if (time >= t_start1 && time <= t_end1) {
+      current_beta <- current_beta * (1 - red1)
+    }
+
+    # 2. interwencja: 21–119 dzień
+    if (time >= t_start2 && time <= t_end2) {
+      current_beta <- current_beta * (1 - red2)
+    }
+
+    # równania SIR
+    dS <- -current_beta * S * I / N 
+       dI <-  current_beta * S * I / N - (v1 + v2) * I
+    dR <- (v1 + v2) * I
+  dInc=current_beta * S * I / N 
+    list(c(dS, dI, dInc, dR))
+  })
+}
+
+
+
+
+```
+ Simulation with Interventions
+
+
+```{r}
+S0 <- 21191800
+I0 <- 5607
+R0=0
+
+N  <- S0 + I0 +R0
+Inc0=0
+
+beta <- 0.2416
+v1   <- 0.044 
+v2   <- 0.1
+
+# 1. interwencja (stara)
+t_start1 <- 18
+t_end1   <- 37
+red1     <- 0.50   # 20% redukcji
+
+# 2. interwencja (nowa)
+t_start2 <- 21
+t_end2   <- 179
+red2     <- 0.105   # np. 5% redukcji – możesz zmienić
+
+
+parameters_intervention <- c(
+  beta    = beta,
+  v1      = v1,
+  v2      = v2,
+  N       = N,
+  t_start1 = t_start1,
+  t_end1   = t_end1,
+  red1     = red1,
+  t_start2 = t_start2,
+  t_end2   = t_end2,
+  red2     = red2
+)
+
+initial_state <- c(S = S0, I = I0, Inc = Inc0, R=R0)
+times <- seq(0, 202, by = 1)
+
+output_intervention <- ode(
+  y     = initial_state,
+  times = times,
+  func  = sir_intervention_model,
+  parms = parameters_intervention
+)
+output_intervention_df <- as.data.frame(output_intervention)
+out_df <- output_intervention_df 
+
+
+```
+
+
+
+```{r }
+# Plot both scenarios
+ggplot(output_intervention_df, aes(x = time)) +
+  geom_line(aes(y = S, color = "Susceptible"), size = 1) +
+  geom_line(aes(y = I, color = "Infected"), size = 1) +
+  geom_line(aes(y = R, color = "Recovered"), size = 1) +
+  labs(title = "SIR Model with Interventions: COVID",
+       x = "Time", y = "Population") +
+  theme_minimal() +
+  geom_vline(xintercept = t_start, linetype = "dotted", color = "grey") +
+  annotate("text", x = t_start + 2, y = 800, label = "Intervention Starts", color = "grey")
+
+```
+
+
+
+```{r }
+out_df <- out_df %>%
+  arrange(time) %>%
+  mutate(
+    date   = start_date + time,
+    # dzienna incydencja jako różnica kumulatywnej Inc
+    Inc_day = 0.0003567*c(Inc[1], diff(Inc))
+  )
+
+ggplot(out_df, aes(x = time)) +
+  geom_line(aes(y = 0.0003567*Inc_day, color = "Infected"), size = 1) +
+  labs(title = "SIR Model with Interventions: COVID-19",
+       x = "Time", y = "Population") +
+  theme_minimal() +
+  geom_vline(xintercept = t_start, linetype = "dotted", color = "grey") +
+  annotate("text", x = t_start + 2, y = 800, label = "Intervention Starts", color = "grey")
+
+```
+
+
+
+```{r }
+## 1. Data startu symulacji (dzień 0 = 12 marca)
+start_date <- as.Date("2020-03-12")   # zmień rok, jeśli potrzeba
+
+out_df <- out_df %>%
+  arrange(time) %>%
+  mutate(
+    date   = start_date + time,
+    # dzienna incydencja jako różnica kumulatywnej Inc
+    Inc_day = c(Inc[1], diff(Inc))
+  )
+
+## 2. Surowa incydencja miesięczna (po kalendarzowych miesiącach)
+monthly_raw <- out_df %>%
+  group_by(month = format(date, "%Y-%m")) %>%  # np. "2020-03", "2020-04"
+  summarise(
+    new_infections_raw = sum(Inc_day, na.rm = TRUE),
+    n_days             = n(),                 # ile dni mamy w tym miesiącu w symulacji
+    .groups = "drop"
+  )
+
+monthly_raw
+
+
+
+```
+
+
+
+```{r }
+monthly_incidence <- monthly_raw %>%
+  mutate(
+    new_infections_adj = if_else(
+      month == "2020-03",
+      new_infections_raw * (31 / n_days),  # przeliczenie na pełny miesiąc
+      new_infections_raw                   # pozostałe miesiące – pełne
+    )
+  )
+
+monthly_incidence
+
+
+```
+
+
+
+```{r }
+ggplot() +
+  # seria z output_intervention_df
+  geom_line(
+    data = out_df_GI[2:180, ],
+    aes(x = time, y = Inc_day, color = "GI"),
+    size = 1
+  ) +
+  # seria z out_df
+  geom_line(
+    data = out_df[2:180,],
+    aes(x = time, y = 0.003567 * Inc_day, color = "COVID"),
+    size = 1
+  ) +
+  # linia interwencji
+ geom_vline(xintercept = t_start1, linetype = "dashed", color = "grey40") +
+  geom_vline(xintercept = t_end1,   linetype = "dashed", color = "grey40") +
+  geom_vline(xintercept = t_start2, linetype = "dotted", color = "grey50") +
+  geom_vline(xintercept = t_end2,   linetype = "dotted", color = "grey50") +
+  annotate("text", x = t_start1 + 1, y = 800, label = "lockdown", hjust = 0) +
+  annotate("text", x = t_start2 + 1, y = 750, label = "hand hygiene", hjust = 0) +
+  scale_color_manual(
+    name = "Seria",
+    values = c("COVID" = "red", "GI" = "blue")
+  ) +
+  theme_minimal()
+
+
+```
+
+
+
+```{r }
+
+
+out_df_GI <- out_df_GI %>%
+  arrange(time) %>%
+  mutate(
+    date   = start_date + time,
+    # dzienna incydencja jako różnica kumulatywnej Inc
+    Inc_day = c(Inc[1], diff(Inc))
+  )
+```
